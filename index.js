@@ -1,5 +1,4 @@
 import makeWASocket, { useSingleFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
 import fs from 'fs-extra';
 import path from 'path';
 import ytdl from 'ytdl-core';
@@ -57,7 +56,7 @@ async function startBot() {
             console.log(`Owner number ${ownerNumber} is pre-linked ✅`);
             console.log('NOONE Bot is now ONLINE ✅');
         } else if(connection === 'close') {
-            if((lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut){
+            if(lastDisconnect?.error && lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut){
                 startBot();
             } else {
                 console.log('Logged out. Delete session folder and redeploy.');
