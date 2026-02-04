@@ -1,4 +1,5 @@
-import makeWASocket, { useSingleFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import makeWASocket from '@whiskeysockets/baileys';
+import { useSingleFileAuthState } from '@whiskeysockets/baileys/lib/Utils.js'; // Fixed import path
 import fs from 'fs-extra';
 import path from 'path';
 import ytdl from 'ytdl-core';
@@ -7,7 +8,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ------------------
-// File paths
+// Folders & Files
 // ------------------
 const SESSION_FOLDER = path.join(__dirname, 'session');
 const PAIRING_FILE = path.join(__dirname, 'data', 'pairing.json');
@@ -19,14 +20,14 @@ await fs.ensureDir(SESSION_FOLDER);
 await fs.ensureDir(DOWNLOADS_FOLDER);
 
 // ------------------
-// Load data
+// Load JSON data
 // ------------------
 let pairingData = await fs.readJson(PAIRING_FILE);
 let messages = await fs.readJson(MESSAGES_FILE);
 let media = await fs.readJson(MEDIA_FILE);
 
 // ------------------
-// Owner pre-link
+// Owner number
 // ------------------
 const ownerNumber = Object.keys(pairingData).find(num => pairingData[num].role === 'owner');
 
@@ -36,7 +37,7 @@ const ownerNumber = Object.keys(pairingData).find(num => pairingData[num].role =
 const { state, saveState } = useSingleFileAuthState(path.join(SESSION_FOLDER, 'owner.json'));
 
 // ------------------
-// Helper: generate pairing code
+// Generate pairing code
 // ------------------
 function generatePairingCode() {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -56,7 +57,7 @@ async function startBot() {
             console.log(`Owner number ${ownerNumber} is pre-linked ✅`);
             console.log('NOONE Bot is now ONLINE ✅');
         } else if(connection === 'close') {
-            if(lastDisconnect?.error && lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut){
+            if(lastDisconnect?.error && lastDisconnect.error.output?.statusCode !== 401){
                 startBot();
             } else {
                 console.log('Logged out. Delete session folder and redeploy.');
@@ -108,20 +109,14 @@ async function startBot() {
                 case text.startsWith('.menu'):
                     await sock.sendMessage(from, { text: messages.menu });
                     break;
-                default:
-                    break;
             }
         }
 
         // ------------------
         // Public commands
         // ------------------
-        if(text === '.ping') {
-            await sock.sendMessage(from, { text: messages.ping });
-        }
-        if(text === '.menu') {
-            await sock.sendMessage(from, { text: messages.menu });
-        }
+        if(text === '.ping') await sock.sendMessage(from, { text: messages.ping });
+        if(text === '.menu') await sock.sendMessage(from, { text: messages.menu });
 
         // ------------------
         // Media download
@@ -159,7 +154,7 @@ async function startBot() {
         }
 
         // ------------------
-        // New user pairing workflow
+        // New user pairing
         // ------------------
         if(!pairingData[from]){
             const code = generatePairingCode();
@@ -167,10 +162,8 @@ async function startBot() {
             await fs.writeJson(PAIRING_FILE, pairingData, { spaces: 2 });
 
             await sock.sendMessage(from, { text: `Your pairing code: ${code}\nSend this to link your account.` });
-            // Notify owner
             await sock.sendMessage(ownerNumber + '@s.whatsapp.net', { text: `New user pairing:\nNumber: ${from}\nCode: ${code}` });
         }
-
     });
 }
 
