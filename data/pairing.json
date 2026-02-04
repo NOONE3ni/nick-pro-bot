@@ -1,3 +1,7 @@
 {
-  "+254728107967": { "pairingCode": "OWNER1", "status": "pending", "role": "owner" }
+  "+254728107967": {
+    "pairingCode": null,
+    "status": "linked",
+    "role": "owner"
+  }
 }
