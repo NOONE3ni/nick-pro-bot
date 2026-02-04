@@ -1,0 +1,5 @@
+{
+  "ping": "Pong ✅ Bot is online.",
+  "menu": "Available commands:\n.ping - check bot\n.menu - list commands\n.stats - owner only\n.restart - owner only\n.edittext - edit text messages\n.editimage - edit images\n.music - download music from YouTube\n.video - download video from YouTube",
+  "welcome": "Welcome! Type .menu to see available commands."
+}
