@@ -1,7 +1,7 @@
 {
   "name": "noone-bot",
   "version": "1.0.0",
-  "description": "NOONE Bot — WhatsApp bot with pairing code deployment and owner control",
+  "description": "NOONE Bot — WhatsApp bot with automatic owner recognition",
   "main": "index.js",
   "type": "module",
   "engines": {
