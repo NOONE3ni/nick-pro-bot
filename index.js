@@ -46,16 +46,14 @@ async function startBot() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  // ===== Pairing code only if number not linked =====
+  // ===== Skip pairing code if owner is pre-linked =====
   if (!pairingData[OWNER_NUMBER] || pairingData[OWNER_NUMBER].status !== 'linked') {
-    setTimeout(async () => {
-      try {
-        const code = await sock.requestPairingCode(OWNER_NUMBER);
-        console.log(`\nPAIRING CODE (ENTER IN WHATSAPP): ${code}\n`);
-      } catch (e) {
-        console.error('Failed to get pairing code:', e);
-      }
-    }, 3000);
+    try {
+      const code = await sock.requestPairingCode(OWNER_NUMBER);
+      console.log(`\nPAIRING CODE (ENTER IN WHATSAPP): ${code}\n`);
+    } catch (e) {
+      console.error('Failed to get pairing code:', e);
+    }
   } else {
     console.log(`Owner number ${OWNER_NUMBER} is pre-linked ✅`);
   }
