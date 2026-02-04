@@ -1,120 +1,178 @@
-import makeWASocket, {
-  useMultiFileAuthState,
-  DisconnectReason,
-  fetchLatestBaileysVersion
-} from '@whiskeysockets/baileys';
-import fs from 'fs';
+import makeWASocket, { useSingleFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import { Boom } from '@hapi/boom';
+import fs from 'fs-extra';
 import path from 'path';
-import pino from 'pino';
-import express from 'express';
+import ytdl from 'ytdl-core';
 import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ===== CONFIG =====
-const BOT_NAME = process.env.BOT_NAME || 'NOONE Bot';
-const OWNER_NUMBER = (process.env.BOT_OWNER_NUMBER || '254728107967').replace(/\D/g, '');
-const SESSION_DIR = path.join(__dirname, 'session');
-if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
+// ------------------
+// File paths
+// ------------------
+const SESSION_FOLDER = path.join(__dirname, 'session');
+const PAIRING_FILE = path.join(__dirname, 'data', 'pairing.json');
+const MESSAGES_FILE = path.join(__dirname, 'data', 'messages.json');
+const MEDIA_FILE = path.join(__dirname, 'data', 'media.json');
+const DOWNLOADS_FOLDER = path.join(__dirname, 'downloads');
 
-// ===== Express server for Render health check =====
-const app = express();
-const PORT = process.env.PORT || 3000;
-app.get('/', (req, res) => res.send(`${BOT_NAME} is running ✅`));
-app.listen(PORT, () => console.log(`Web server listening on port ${PORT}`));
+await fs.ensureDir(SESSION_FOLDER);
+await fs.ensureDir(DOWNLOADS_FOLDER);
 
-// ===== Load pairing data =====
-const pairingDataPath = path.join(__dirname, 'data/pairing.json');
-let pairingData = {};
-if (fs.existsSync(pairingDataPath)) {
-  pairingData = JSON.parse(fs.readFileSync(pairingDataPath, 'utf-8'));
+// ------------------
+// Load data
+// ------------------
+let pairingData = await fs.readJson(PAIRING_FILE);
+let messages = await fs.readJson(MESSAGES_FILE);
+let media = await fs.readJson(MEDIA_FILE);
+
+// ------------------
+// Owner pre-link
+// ------------------
+const ownerNumber = Object.keys(pairingData).find(num => pairingData[num].role === 'owner');
+
+// ------------------
+// Auth state
+// ------------------
+const { state, saveState } = useSingleFileAuthState(path.join(SESSION_FOLDER, 'owner.json'));
+
+// ------------------
+// Helper: generate pairing code
+// ------------------
+function generatePairingCode() {
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-// ===== Start WhatsApp bot =====
+// ------------------
+// Start bot
+// ------------------
 async function startBot() {
-  const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
-  const { version } = await fetchLatestBaileysVersion();
+    const sock = makeWASocket({ printQRInTerminal: true, auth: state });
 
-  const sock = makeWASocket({
-    version,
-    logger: pino({ level: 'silent' }),
-    printQRInTerminal: false,
-    auth: state,
-    browser: ['NOONE Bot', 'Chrome', '1.0.0']
-  });
+    sock.ev.on('creds.update', saveState);
 
-  sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect } = update;
+        if(connection === 'open') {
+            console.log(`Owner number ${ownerNumber} is pre-linked ✅`);
+            console.log('NOONE Bot is now ONLINE ✅');
+        } else if(connection === 'close') {
+            if((lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut){
+                startBot();
+            } else {
+                console.log('Logged out. Delete session folder and redeploy.');
+            }
+        }
+    });
 
-  // ===== Skip pairing if owner is pre-linked =====
-  if (!pairingData[OWNER_NUMBER] || pairingData[OWNER_NUMBER].status !== 'linked') {
-    console.log(`No pre-linked owner. Pairing code will be generated for other users.`);
-    // Optional: requestPairingCode() for other users, not needed for your number
-  } else {
-    console.log(`Owner number ${OWNER_NUMBER} is pre-linked ✅`);
-  }
+    // ------------------
+    // Message handler
+    // ------------------
+    sock.ev.on('messages.upsert', async m => {
+        const msg = m.messages[0];
+        if(!msg.message) return;
 
-  // ===== Connection updates =====
-  sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect } = update;
+        const text = msg.message.conversation || msg.message?.extendedTextMessage?.text;
+        const from = msg.key.remoteJid;
+        if(!text) return;
 
-    if (connection === 'close') {
-      const reason = lastDisconnect?.error?.output?.statusCode;
-      console.log('Connection closed. Reason:', reason);
+        const isOwner = from.includes(ownerNumber);
 
-      if (reason !== DisconnectReason.loggedOut) {
-        startBot();
-      } else {
-        console.log('Logged out. Delete session folder and redeploy.');
-      }
-    }
+        // ------------------
+        // Owner commands
+        // ------------------
+        if(isOwner){
+            switch(true){
+                case text.startsWith('.stats'):
+                    await sock.sendMessage(from, { text: `Owner: ${ownerNumber}\nLinked users: ${Object.keys(pairingData).length}` });
+                    break;
+                case text.startsWith('.restart'):
+                    await sock.sendMessage(from, { text: 'Restarting bot...' });
+                    process.exit(0);
+                    break;
+                case text.startsWith('.edittext'):
+                    const [, key, ...newMsg] = text.split(' ');
+                    if(messages[key]){
+                        messages[key] = newMsg.join(' ');
+                        await fs.writeJson(MESSAGES_FILE, messages, { spaces: 2 });
+                        await sock.sendMessage(from, { text: `Updated message for ${key}` });
+                    }
+                    break;
+                case text.startsWith('.editimage'):
+                    const [, imgKey, url] = text.split(' ');
+                    if(media[imgKey]){
+                        media[imgKey] = url;
+                        await fs.writeJson(MEDIA_FILE, media, { spaces: 2 });
+                        await sock.sendMessage(from, { text: `Updated image for ${imgKey}` });
+                    }
+                    break;
+                case text.startsWith('.menu'):
+                    await sock.sendMessage(from, { text: messages.menu });
+                    break;
+                default:
+                    break;
+            }
+        }
 
-    if (connection === 'open') {
-      console.log(`${BOT_NAME} is now ONLINE ✅`);
-    }
-  });
+        // ------------------
+        // Public commands
+        // ------------------
+        if(text === '.ping') {
+            await sock.sendMessage(from, { text: messages.ping });
+        }
+        if(text === '.menu') {
+            await sock.sendMessage(from, { text: messages.menu });
+        }
 
-  // ===== Message handler =====
-  sock.ev.on('messages.upsert', async ({ messages }) => {
-    const msg = messages[0];
-    if (!msg?.message || msg.key.fromMe) return;
+        // ------------------
+        // Media download
+        // ------------------
+        if(text.startsWith('.music')){
+            const ytLink = text.split(' ')[1];
+            if(!ytLink) return sock.sendMessage(from, { text: 'Provide a YouTube link.' });
+            try{
+                const filePath = path.join(DOWNLOADS_FOLDER, `audio_${Date.now()}.mp3`);
+                ytdl(ytLink, { filter: 'audioonly' }).pipe(fs.createWriteStream(filePath));
+                await sock.sendMessage(from, { text: 'Downloading audio...' });
+                setTimeout(async () => {
+                    await sock.sendMessage(from, { audio: fs.readFileSync(filePath), mimetype: 'audio/mpeg' });
+                    fs.unlinkSync(filePath);
+                }, 5000);
+            } catch(e){
+                await sock.sendMessage(from, { text: 'Failed to download audio.' });
+            }
+        }
 
-    const from = msg.key.remoteJid;
-    const isGroup = from.endsWith('@g.us');
-    const sender = isGroup ? msg.key.participant?.split('@')[0] : from.split('@')[0];
-    const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
-    const isOwner = sender === OWNER_NUMBER;
+        if(text.startsWith('.video')){
+            const ytLink = text.split(' ')[1];
+            if(!ytLink) return sock.sendMessage(from, { text: 'Provide a YouTube link.' });
+            try{
+                const filePath = path.join(DOWNLOADS_FOLDER, `video_${Date.now()}.mp4`);
+                ytdl(ytLink, { quality: 'highestvideo' }).pipe(fs.createWriteStream(filePath));
+                await sock.sendMessage(from, { text: 'Downloading video...' });
+                setTimeout(async () => {
+                    await sock.sendMessage(from, { video: fs.readFileSync(filePath), mimetype: 'video/mp4' });
+                    fs.unlinkSync(filePath);
+                }, 10000);
+            } catch(e){
+                await sock.sendMessage(from, { text: 'Failed to download video.' });
+            }
+        }
 
-    // ===== Public commands =====
-    if (text === '.ping') await sock.sendMessage(from, { text: 'Pong ✅ Bot is online.' });
+        // ------------------
+        // New user pairing workflow
+        // ------------------
+        if(!pairingData[from]){
+            const code = generatePairingCode();
+            pairingData[from] = { pairingCode: code, status: 'pending', role: 'user' };
+            await fs.writeJson(PAIRING_FILE, pairingData, { spaces: 2 });
 
-    if (text === '.menu') {
-      const menu = `
-🤖 *${BOT_NAME} Menu*
+            await sock.sendMessage(from, { text: `Your pairing code: ${code}\nSend this to link your account.` });
+            // Notify owner
+            await sock.sendMessage(ownerNumber + '@s.whatsapp.net', { text: `New user pairing:\nNumber: ${from}\nCode: ${code}` });
+        }
 
-Public:
-- .ping
-- .menu
-
-Owner:
-- .stats
-- .restart
-`;
-      await sock.sendMessage(from, { text: menu });
-    }
-
-    // ===== Owner commands =====
-    if (isOwner && text === '.stats') {
-      await sock.sendMessage(from, {
-        text: `👑 Owner: ${OWNER_NUMBER}\n🤖 Bot: ${BOT_NAME}\n✅ Status: Online`
-      });
-    }
-
-    if (isOwner && text === '.restart') {
-      await sock.sendMessage(from, { text: '♻️ Restarting bot...' });
-      process.exit(0);
-    }
-  });
+    });
 }
 
-startBot().catch((err) => console.error('Bot crashed:', err));
+startBot();
