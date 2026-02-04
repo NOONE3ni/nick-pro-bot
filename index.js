@@ -18,11 +18,18 @@ const OWNER_NUMBER = (process.env.BOT_OWNER_NUMBER || '254728107967').replace(/\
 const SESSION_DIR = path.join(__dirname, 'session');
 if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
 
-// ===== Tiny Express server for Render health check =====
+// ===== Express server for Render health check =====
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => res.send(`${BOT_NAME} is running ✅`));
 app.listen(PORT, () => console.log(`Web server listening on port ${PORT}`));
+
+// ===== Load pairing data =====
+const pairingDataPath = path.join(__dirname, 'data/pairing.json');
+let pairingData = {};
+if (fs.existsSync(pairingDataPath)) {
+  pairingData = JSON.parse(fs.readFileSync(pairingDataPath, 'utf-8'));
+}
 
 // ===== Start WhatsApp bot =====
 async function startBot() {
@@ -39,20 +46,18 @@ async function startBot() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  // ===== Pairing code for owner =====
-  if (!sock.authState.creds.registered) {
-    console.log('Requesting pairing code for owner:', OWNER_NUMBER);
+  // ===== Pairing code only if number not linked =====
+  if (!pairingData[OWNER_NUMBER] || pairingData[OWNER_NUMBER].status !== 'linked') {
     setTimeout(async () => {
       try {
         const code = await sock.requestPairingCode(OWNER_NUMBER);
-        console.log(`\n==============================`);
-        console.log(`PAIRING CODE (ENTER IN WHATSAPP): ${code}`);
-        console.log(`Open WhatsApp → Linked devices → Link with phone number`);
-        console.log(`==============================\n`);
+        console.log(`\nPAIRING CODE (ENTER IN WHATSAPP): ${code}\n`);
       } catch (e) {
         console.error('Failed to get pairing code:', e);
       }
     }, 3000);
+  } else {
+    console.log(`Owner number ${OWNER_NUMBER} is pre-linked ✅`);
   }
 
   // ===== Connection updates =====
@@ -86,10 +91,8 @@ async function startBot() {
     const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
     const isOwner = sender === OWNER_NUMBER;
 
-    // ===== Basic commands =====
-    if (text === '.ping') {
-      await sock.sendMessage(from, { text: 'Pong ✅ Bot is online.' });
-    }
+    // ===== Public commands =====
+    if (text === '.ping') await sock.sendMessage(from, { text: 'Pong ✅ Bot is online.' });
 
     if (text === '.menu') {
       const menu = `
