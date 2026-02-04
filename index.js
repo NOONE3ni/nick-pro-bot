@@ -1,5 +1,5 @@
 import makeWASocket from '@whiskeysockets/baileys';
-import { useSingleFileAuthState } from '@whiskeysockets/baileys/lib/Utils.js'; // Fixed import path
+import { useSingleFileAuthState } from '@whiskeysockets/baileys/lib/Utils.js';
 import fs from 'fs-extra';
 import path from 'path';
 import ytdl from 'ytdl-core';
