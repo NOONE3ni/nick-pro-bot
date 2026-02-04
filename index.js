@@ -4,22 +4,27 @@ import makeWASocket, {
   fetchLatestBaileysVersion
 } from '@whiskeysockets/baileys';
 import fs from 'fs';
-import pino from 'pino';
 import path from 'path';
+import pino from 'pino';
+import express from 'express';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ====== CONFIG ======
+// ===== CONFIG =====
 const BOT_NAME = process.env.BOT_NAME || 'NOONE Bot';
 const OWNER_NUMBER = (process.env.BOT_OWNER_NUMBER || '254728107967').replace(/\D/g, '');
 const SESSION_DIR = path.join(__dirname, 'session');
-
-// ensure session dir exists
 if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
 
-// ====== START BOT ======
+// ===== Tiny Express server for Render health check =====
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.get('/', (req, res) => res.send(`${BOT_NAME} is running ✅`));
+app.listen(PORT, () => console.log(`Web server listening on port ${PORT}`));
+
+// ===== Start WhatsApp bot =====
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
   const { version } = await fetchLatestBaileysVersion();
@@ -27,21 +32,19 @@ async function startBot() {
   const sock = makeWASocket({
     version,
     logger: pino({ level: 'silent' }),
-    printQRInTerminal: false, // we use pairing code, not QR
+    printQRInTerminal: false,
     auth: state,
     browser: ['NOONE Bot', 'Chrome', '1.0.0']
   });
 
   sock.ev.on('creds.update', saveCreds);
 
-  // ====== PAIRING CODE LOGIN (NO QR) ======
+  // ===== Pairing code for owner =====
   if (!sock.authState.creds.registered) {
-    const number = OWNER_NUMBER;
-    console.log('Requesting pairing code for owner:', number);
-
+    console.log('Requesting pairing code for owner:', OWNER_NUMBER);
     setTimeout(async () => {
       try {
-        const code = await sock.requestPairingCode(number);
+        const code = await sock.requestPairingCode(OWNER_NUMBER);
         console.log(`\n==============================`);
         console.log(`PAIRING CODE (ENTER IN WHATSAPP): ${code}`);
         console.log(`Open WhatsApp → Linked devices → Link with phone number`);
@@ -52,7 +55,7 @@ async function startBot() {
     }, 3000);
   }
 
-  // ====== CONNECTION UPDATES ======
+  // ===== Connection updates =====
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect } = update;
 
@@ -72,27 +75,18 @@ async function startBot() {
     }
   });
 
-  // ====== MESSAGE HANDLER ======
+  // ===== Message handler =====
   sock.ev.on('messages.upsert', async ({ messages }) => {
     const msg = messages[0];
     if (!msg?.message || msg.key.fromMe) return;
 
     const from = msg.key.remoteJid;
     const isGroup = from.endsWith('@g.us');
-
-    const sender =
-      isGroup
-        ? msg.key.participant?.split('@')[0]
-        : from.split('@')[0];
-
-    const text =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text ||
-      '';
-
+    const sender = isGroup ? msg.key.participant?.split('@')[0] : from.split('@')[0];
+    const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
     const isOwner = sender === OWNER_NUMBER;
 
-    // ====== BASIC COMMANDS ======
+    // ===== Basic commands =====
     if (text === '.ping') {
       await sock.sendMessage(from, { text: 'Pong ✅ Bot is online.' });
     }
@@ -112,7 +106,7 @@ Owner:
       await sock.sendMessage(from, { text: menu });
     }
 
-    // ====== OWNER COMMANDS ======
+    // ===== Owner commands =====
     if (isOwner && text === '.stats') {
       await sock.sendMessage(from, {
         text: `👑 Owner: ${OWNER_NUMBER}\n🤖 Bot: ${BOT_NAME}\n✅ Status: Online`
