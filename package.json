@@ -1,20 +1,17 @@
 {
   "name": "noone-bot",
   "version": "1.0.0",
-  "description": "NOONE Bot — WhatsApp bot with automatic owner recognition",
+  "description": "NOONE Bot — WhatsApp bot with pairing code, owner commands, editing, tracking, and media downloads",
   "main": "index.js",
   "type": "module",
-  "engines": {
-    "node": "20.x"
-  },
-  "scripts": {
-    "start": "node index.js"
-  },
+  "engines": { "node": "20.x" },
+  "scripts": { "start": "node index.js" },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
-    "express": "^4.18.2",
     "fs-extra": "^11.1.1",
-    "pino": "^8.12.0",
-    "sharp": "^0.34.5"
+    "gtts": "^0.2.1",
+    "sharp": "^0.34.5",
+    "ytdl-core": "^4.11.1",
+    "axios": "^1.6.5"
   }
 }
