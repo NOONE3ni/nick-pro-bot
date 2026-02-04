@@ -1,93 +1,129 @@
-import makeWASocket, { useSingleFileAuthState } from '@whiskeysockets/baileys';
-import { ping } from './commands/ping.js';
-import { menu } from './commands/menu.js';
-import { tts } from './commands/tts.js';
-import { applyFilter } from './commands/filter.js';
-import { sticker } from './commands/sticker.js';
-import { readJSON, writeJSON } from './utils/helpers.js';
+import makeWASocket, {
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion
+} from '@whiskeysockets/baileys';
+import fs from 'fs';
+import pino from 'pino';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const { state, saveState } = useSingleFileAuthState('./data/auth_info.json');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const conn = makeWASocket({ auth: state, printQRInTerminal: false });
-conn.ev.on('creds.update', saveState);
+// ====== CONFIG ======
+const BOT_NAME = process.env.BOT_NAME || 'NOONE Bot';
+const OWNER_NUMBER = (process.env.BOT_OWNER_NUMBER || '254728107967').replace(/\D/g, '');
+const SESSION_DIR = path.join(__dirname, 'session');
 
-console.log('NOONE Bot started — pairing system active.');
+// ensure session dir exists
+if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
 
-const users = readJSON('./data/users.json');
-const pairing = readJSON('./data/pairing.json');
+// ====== START BOT ======
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+  const { version } = await fetchLatestBaileysVersion();
 
-conn.ev.on('messages.upsert', async (m) => {
-  const msg = m.messages[0];
-  if(!msg.message) return;
+  const sock = makeWASocket({
+    version,
+    logger: pino({ level: 'silent' }),
+    printQRInTerminal: false, // we use pairing code, not QR
+    auth: state,
+    browser: ['NOONE Bot', 'Chrome', '1.0.0']
+  });
 
-  const sender = msg.key.remoteJid;
-  const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
-  if(!text) return;
+  sock.ev.on('creds.update', saveCreds);
 
-  // Handle pairing system
-  if(text.startsWith('.pairme')) {
-    if(pairing[sender]) {
-      await conn.sendMessage(sender, { text: `Your pairing code is: ${pairing[sender].pairingCode}` });
-    } else {
-      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-      pairing[sender] = { pairingCode: code, status: 'pending', role: 'user' };
-      writeJSON('./data/pairing.json', pairing);
-      await conn.sendMessage(sender, { text: `Your pairing code is: ${code}. Use .activate <code> to activate.` });
-    }
-    return;
+  // ====== PAIRING CODE LOGIN (NO QR) ======
+  if (!sock.authState.creds.registered) {
+    const number = OWNER_NUMBER;
+    console.log('Requesting pairing code for owner:', number);
+
+    setTimeout(async () => {
+      try {
+        const code = await sock.requestPairingCode(number);
+        console.log(`\n==============================`);
+        console.log(`PAIRING CODE (ENTER IN WHATSAPP): ${code}`);
+        console.log(`Open WhatsApp → Linked devices → Link with phone number`);
+        console.log(`==============================\n`);
+      } catch (e) {
+        console.error('Failed to get pairing code:', e);
+      }
+    }, 3000);
   }
 
-  if(text.startsWith('.activate ')) {
-    const code = text.replace('.activate ', '').trim();
-    const entry = Object.entries(pairing).find(([num, obj]) => obj.pairingCode === code);
-    if(entry) {
-      const [num, obj] = entry;
-      pairing[num].status = 'active';
-      writeJSON('./data/pairing.json', pairing);
-      users[num] = { joined: new Date().toISOString() };
-      writeJSON('./data/users.json', users);
-      await conn.sendMessage(sender, { text: `Bot activated! You can now use commands.` });
-    } else {
-      await conn.sendMessage(sender, { text: `Invalid pairing code.` });
-    }
-    return;
-  }
+  // ====== CONNECTION UPDATES ======
+  sock.ev.on('connection.update', (update) => {
+    const { connection, lastDisconnect } = update;
 
-  // Owner commands
-  const ownerNumber = Object.keys(pairing).find(n => pairing[n].role === 'owner');
-  if(sender === ownerNumber + '@s.whatsapp.net') {
-    if(text.startsWith('.stats')) {
-      await conn.sendMessage(sender, { text: `Bot online. Users count: ${Object.keys(users).length}` });
-    }
-    if(text.startsWith('.users')) {
-      await conn.sendMessage(sender, { text: `Users:\n${Object.keys(users).join('\n')}` });
-    }
-    if(text.startsWith('.block ')) {
-      const num = text.replace('.block ', '').trim();
-      if(users[num]) users[num].blocked = true;
-      writeJSON('./data/users.json', users);
-      await conn.sendMessage(sender, { text: `${num} blocked.` });
-    }
-    if(text.startsWith('.unblock ')) {
-      const num = text.replace('.unblock ', '').trim();
-      if(users[num]) users[num].blocked = false;
-      writeJSON('./data/users.json', users);
-      await conn.sendMessage(sender, { text: `${num} unblocked.` });
-    }
-    if(text.startsWith('.restart')) process.exit(0);
-  }
+    if (connection === 'close') {
+      const reason = lastDisconnect?.error?.output?.statusCode;
+      console.log('Connection closed. Reason:', reason);
 
-  // Public commands (for active users)
-  if(!users[sender] || users[sender].blocked) return;
-  if(text.startsWith('.ping')) await ping(conn, sender);
-  if(text.startsWith('.menu')) await menu(conn, sender);
-  if(text.startsWith('.tts ')) await tts(conn, sender, text.replace('.tts ', ''));
-  if(text.startsWith('.filter ')) {
-    const imgBuffer = msg.message.imageMessage?.image?.data;
-    await applyFilter(conn, sender, imgBuffer, text.replace('.filter ', ''));
-  }
-  if(text.startsWith('.sticker')) {
-    const imgBuffer = msg.message.imageMessage?.image?.data;
-    await sticker(conn, sender, imgBuffer);
-  }
-});
+      if (reason !== DisconnectReason.loggedOut) {
+        startBot();
+      } else {
+        console.log('Logged out. Delete session folder and redeploy.');
+      }
+    }
+
+    if (connection === 'open') {
+      console.log(`${BOT_NAME} is now ONLINE ✅`);
+    }
+  });
+
+  // ====== MESSAGE HANDLER ======
+  sock.ev.on('messages.upsert', async ({ messages }) => {
+    const msg = messages[0];
+    if (!msg?.message || msg.key.fromMe) return;
+
+    const from = msg.key.remoteJid;
+    const isGroup = from.endsWith('@g.us');
+
+    const sender =
+      isGroup
+        ? msg.key.participant?.split('@')[0]
+        : from.split('@')[0];
+
+    const text =
+      msg.message.conversation ||
+      msg.message.extendedTextMessage?.text ||
+      '';
+
+    const isOwner = sender === OWNER_NUMBER;
+
+    // ====== BASIC COMMANDS ======
+    if (text === '.ping') {
+      await sock.sendMessage(from, { text: 'Pong ✅ Bot is online.' });
+    }
+
+    if (text === '.menu') {
+      const menu = `
+🤖 *${BOT_NAME} Menu*
+
+Public:
+- .ping
+- .menu
+
+Owner:
+- .stats
+- .restart
+`;
+      await sock.sendMessage(from, { text: menu });
+    }
+
+    // ====== OWNER COMMANDS ======
+    if (isOwner && text === '.stats') {
+      await sock.sendMessage(from, {
+        text: `👑 Owner: ${OWNER_NUMBER}\n🤖 Bot: ${BOT_NAME}\n✅ Status: Online`
+      });
+    }
+
+    if (isOwner && text === '.restart') {
+      await sock.sendMessage(from, { text: '♻️ Restarting bot...' });
+      process.exit(0);
+    }
+  });
+}
+
+startBot().catch((err) => console.error('Bot crashed:', err));
